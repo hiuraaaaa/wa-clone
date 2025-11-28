@@ -56,7 +56,7 @@ export default function ChatPage() {
         {
           event: "INSERT",
           schema: "public",
-          table: "messages"
+          table: "messages",
         },
         (payload) => {
           setMessages((prev) => [...prev, payload.new]);
@@ -71,7 +71,7 @@ export default function ChatPage() {
     };
   }, [user]);
 
-  // Auto scroll bawah
+  // Auto scroll ke bawah setiap ada pesan baru
   useEffect(() => {
     if (!bottomRef.current) return;
     bottomRef.current.scrollIntoView({ behavior: "smooth" });
@@ -86,7 +86,7 @@ export default function ChatPage() {
       const { error } = await supabase.from("messages").insert({
         user_id: user.id,
         user_email: user.email,
-        content
+        content,
       });
 
       if (error) {
@@ -143,7 +143,7 @@ export default function ChatPage() {
               <span
                 style={{
                   fontSize: 11,
-                  color: "var(--text-dim)"
+                  color: "var(--text-dim)",
                 }}
               >
                 {user.email}
@@ -164,7 +164,7 @@ export default function ChatPage() {
               padding: 10,
               borderRadius: 12,
               background: "#202c33",
-              fontSize: 13
+              fontSize: 13,
             }}
           >
             <div style={{ fontWeight: 600, marginBottom: 2 }}>
@@ -173,8 +173,8 @@ export default function ChatPage() {
             <div>Semua user gabung di sini.</div>
           </div>
           <p style={{ marginTop: 10 }}>
-            Buka di browser lain / device lain, login pakai email lain →
-            coba chat bareng buat tes realtime.
+            Buka di browser lain / device lain, login pakai email lain → coba
+            chat bareng buat tes realtime.
           </p>
         </div>
       </aside>
@@ -203,7 +203,7 @@ export default function ChatPage() {
                 fontSize: 13,
                 color: "var(--text-dim)",
                 textAlign: "center",
-                marginTop: 16
+                marginTop: 16,
               }}
             >
               Memuat pesan...
@@ -216,7 +216,7 @@ export default function ChatPage() {
                 fontSize: 13,
                 color: "var(--text-dim)",
                 textAlign: "center",
-                marginTop: 16
+                marginTop: 16,
               }}
             >
               Belum ada pesan. Kirim sesuatu dulu 👀
@@ -225,26 +225,27 @@ export default function ChatPage() {
 
           {messages.map((msg) => {
             const isMe = msg.user_id === user.id;
+            const username = msg.user_email?.split("@")[0] || "user";
+            const firstLetter = username[0]?.toUpperCase() || "?";
+
             return (
               <div
                 key={msg.id}
-                className={"msg-row " + (isMe ? "me" : "them")}
+                className={`msg-row ${isMe ? "me" : "them"}`}
               >
+                {/* avatar cuma buat orang lain */}
+                {!isMe && <div className="msg-avatar">{firstLetter}</div>}
+
                 <div className="msg-bubble">
-                  {!isMe && (
-                    <div
-                      style={{
-                        fontSize: 11,
-                        fontWeight: 600,
-                        marginBottom: 2,
-                        color: "#d1d7db"
-                      }}
-                    >
-                      {msg.user_email.split("@")[0]}
-                    </div>
-                  )}
+                  <div className="msg-header">
+                    <span className="msg-username">
+                      {isMe ? `${username} (You)` : username}
+                    </span>
+                    <span className="msg-time">
+                      {prettyTime(msg.created_at)}
+                    </span>
+                  </div>
                   <div className="msg-text">{msg.content}</div>
-                  <div className="msg-meta">{prettyTime(msg.created_at)}</div>
                 </div>
               </div>
             );
@@ -277,6 +278,90 @@ export default function ChatPage() {
           </button>
         </div>
       </section>
+
+      {/* Style bubble kanan–kiri */}
+      <style jsx>{`
+        .chat-messages {
+          flex: 1;
+          overflow-y: auto;
+          padding: 12px 12px 80px;
+          background: #111b21;
+        }
+
+        .msg-row {
+          display: flex;
+          width: 100%;
+          margin-bottom: 8px;
+        }
+
+        .msg-row.me {
+          justify-content: flex-end;
+        }
+
+        .msg-row.them {
+          justify-content: flex-start;
+        }
+
+        .msg-avatar {
+          width: 32px;
+          height: 32px;
+          border-radius: 999px;
+          background: #202c33;
+          color: #e9edef;
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          font-size: 14px;
+          font-weight: 600;
+          margin-right: 6px;
+          flex-shrink: 0;
+        }
+
+        .msg-bubble {
+          max-width: 75%;
+          border-radius: 16px;
+          padding: 8px 10px;
+          background: #202c33;
+          color: #e9edef;
+          font-size: 14px;
+          display: flex;
+          flex-direction: column;
+          gap: 2px;
+        }
+
+        .msg-row.me .msg-bubble {
+          background: #005c4b; /* hijau WA */
+          border-bottom-right-radius: 4px;
+        }
+
+        .msg-row.them .msg-bubble {
+          background: #202c33;
+          border-bottom-left-radius: 4px;
+        }
+
+        .msg-header {
+          display: flex;
+          justify-content: space-between;
+          align-items: baseline;
+          gap: 8px;
+        }
+
+        .msg-username {
+          font-weight: 600;
+          font-size: 12px;
+          color: #d1d7db;
+        }
+
+        .msg-time {
+          font-size: 11px;
+          opacity: 0.7;
+        }
+
+        .msg-text {
+          white-space: pre-wrap;
+          word-wrap: break-word;
+        }
+      `}</style>
     </div>
   );
 }
