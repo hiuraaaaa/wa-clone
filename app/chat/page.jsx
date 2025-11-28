@@ -3,17 +3,24 @@
 import { useEffect, useState, useMemo, useRef } from "react";
 import { useRouter } from "next/navigation";
 import { supabase } from "@/lib/supabaseClient";
+import dynamic from "next/dynamic";
+
+const Picker = dynamic(() => import("emoji-picker-react"), { ssr: false });
 
 export default function ChatPage() {
   const router = useRouter();
   const [user, setUser] = useState(null);
   const [messages, setMessages] = useState([]);
+  const [profiles, setProfiles] = useState({});
   const [input, setInput] = useState("");
   const [loadingMessages, setLoadingMessages] = useState(true);
   const [sending, setSending] = useState(false);
+  const [uploading, setUploading] = useState(false);
   const [isMobile, setIsMobile] = useState(false);
   const [sidebarOpen, setSidebarOpen] = useState(false);
+  const [showEmojiPicker, setShowEmojiPicker] = useState(false);
   const bottomRef = useRef(null);
+  const fileInputRef = useRef(null);
 
   // Detect mobile
   useEffect(() => {
@@ -25,7 +32,7 @@ export default function ChatPage() {
     return () => window.removeEventListener("resize", checkMobile);
   }, []);
 
-  // Cek user
+  // Check user
   useEffect(() => {
     const init = async () => {
       const { data } = await supabase.auth.getUser();
@@ -38,7 +45,7 @@ export default function ChatPage() {
     init();
   }, [router]);
 
-  // Load pesan awal + realtime subscription
+  // Load messages + profiles + realtime
   useEffect(() => {
     if (!user) return;
 
@@ -54,6 +61,19 @@ export default function ChatPage() {
         console.error("Error load messages", error);
       } else {
         setMessages(data || []);
+
+        // Load profiles for all users
+        const userIds = [...new Set(data.map((m) => m.user_id))];
+        const { data: profileData } = await supabase
+          .from("profiles")
+          .select("*")
+          .in("user_id", userIds);
+
+        const profileMap = {};
+        profileData?.forEach((p) => {
+          profileMap[p.user_id] = p;
+        });
+        setProfiles(profileMap);
       }
       setLoadingMessages(false);
     };
@@ -69,8 +89,22 @@ export default function ChatPage() {
           schema: "public",
           table: "messages",
         },
-        (payload) => {
+        async (payload) => {
           setMessages((prev) => [...prev, payload.new]);
+
+          // Load profile if not exists
+          const userId = payload.new.user_id;
+          if (!profiles[userId]) {
+            const { data: profile } = await supabase
+              .from("profiles")
+              .select("*")
+              .eq("user_id", userId)
+              .single();
+
+            if (profile) {
+              setProfiles((prev) => ({ ...prev, [userId]: profile }));
+            }
+          }
         }
       )
       .subscribe();
@@ -107,13 +141,63 @@ export default function ChatPage() {
         user_id: user.id,
         user_email: user.email,
         content,
+        type: "text",
       });
 
       if (!error) {
         setInput("");
+        setShowEmojiPicker(false);
       }
     } finally {
       setSending(false);
+    }
+  };
+
+  const handleFileChange = async (e) => {
+    const file = e.target.files?.[0];
+    if (!file || !user || uploading) return;
+
+    setUploading(true);
+    try {
+      const ext = file.name.split(".").pop();
+      const path = `${user.id}/${Date.now()}.${ext}`;
+
+      // Upload to storage
+      const { error: uploadError } = await supabase.storage
+        .from("chat-uploads")
+        .upload(path, file);
+
+      if (uploadError) {
+        console.error(uploadError);
+        alert("Failed to upload file");
+        return;
+      }
+
+      // Get public URL
+      const { data } = supabase.storage
+        .from("chat-uploads")
+        .getPublicUrl(path);
+
+      const publicUrl = data.publicUrl;
+      const isImage = file.type.startsWith("image/");
+
+      const { error: insertError } = await supabase.from("messages").insert({
+        user_id: user.id,
+        user_email: user.email,
+        type: isImage ? "image" : "file",
+        file_url: publicUrl,
+        file_name: file.name,
+        mime_type: file.type,
+        content: isImage ? "[Image]" : `[File: ${file.name}]`,
+      });
+
+      if (insertError) {
+        console.error(insertError);
+        alert("Failed to send message");
+      }
+    } finally {
+      setUploading(false);
+      e.target.value = "";
     }
   };
 
@@ -127,6 +211,10 @@ export default function ChatPage() {
   const handleLogout = async () => {
     await supabase.auth.signOut();
     router.replace("/");
+  };
+
+  const handleEmojiClick = (emojiData) => {
+    setInput((prev) => prev + emojiData.emoji);
   };
 
   const prettyTime = (iso) => {
@@ -203,10 +291,7 @@ export default function ChatPage() {
 
         {/* BACKDROP */}
         {isMobile && sidebarOpen && (
-          <div
-            style={styles.backdrop}
-            onClick={() => setSidebarOpen(false)}
-          />
+          <div style={styles.backdrop} onClick={() => setSidebarOpen(false)} />
         )}
 
         {/* CHAT PANEL */}
@@ -241,7 +326,10 @@ export default function ChatPage() {
           {/* Messages Area */}
           <div style={styles.messagesArea}>
             {loadingMessages && (
-              <div style={styles.centerText}>Loading messages...</div>
+              <div style={styles.centerText}>
+                <div style={styles.loadingSpinner} />
+                <p>Loading messages...</p>
+              </div>
             )}
 
             {!loadingMessages && messages.length === 0 && (
@@ -253,8 +341,11 @@ export default function ChatPage() {
 
             {messages.map((msg) => {
               const isMe = msg.user_id === user.id;
-              const username = msg.user_email?.split("@")[0] || "user";
+              const profile = profiles[msg.user_id];
+              const username =
+                profile?.username || msg.user_email?.split("@")[0] || "user";
               const firstLetter = username[0]?.toUpperCase() || "?";
+              const avatarUrl = profile?.avatar_url;
 
               return (
                 <div
@@ -265,7 +356,17 @@ export default function ChatPage() {
                   }}
                 >
                   {!isMe && (
-                    <div style={styles.messageAvatar}>{firstLetter}</div>
+                    <div style={styles.messageAvatar}>
+                      {avatarUrl ? (
+                        <img
+                          src={avatarUrl}
+                          alt={username}
+                          style={styles.avatarImage}
+                        />
+                      ) : (
+                        firstLetter
+                      )}
+                    </div>
                   )}
 
                   <div
@@ -279,7 +380,29 @@ export default function ChatPage() {
                     {!isMe && (
                       <div style={styles.messageSender}>{username}</div>
                     )}
-                    <div style={styles.messageText}>{msg.content}</div>
+
+                    {/* Message Content */}
+                    {msg.type === "image" && msg.file_url ? (
+                      <img
+                        src={msg.file_url}
+                        alt={msg.file_name || "image"}
+                        style={styles.messageImage}
+                        onClick={() => window.open(msg.file_url, "_blank")}
+                      />
+                    ) : msg.type === "file" && msg.file_url ? (
+                      <a
+                        href={msg.file_url}
+                        target="_blank"
+                        rel="noreferrer"
+                        style={styles.fileLink}
+                      >
+                        <span style={styles.fileIcon}>📄</span>
+                        <span>{msg.file_name || "File"}</span>
+                      </a>
+                    ) : (
+                      <div style={styles.messageText}>{msg.content}</div>
+                    )}
+
                     <div style={styles.messageTime}>
                       {prettyTime(msg.created_at)}
                     </div>
@@ -292,9 +415,41 @@ export default function ChatPage() {
 
           {/* Input Bar */}
           <div style={styles.inputBar}>
-            <button style={styles.iconBtn}>😊</button>
-            <button style={styles.iconBtn}>📎</button>
-            
+            {/* Emoji Picker */}
+            <div style={{ position: "relative" }}>
+              <button
+                style={styles.iconBtn}
+                onClick={() => setShowEmojiPicker((v) => !v)}
+                title="Emoji"
+              >
+                😊
+              </button>
+
+              {showEmojiPicker && (
+                <div style={styles.emojiPickerWrapper}>
+                  <Picker onEmojiClick={handleEmojiClick} />
+                </div>
+              )}
+            </div>
+
+            {/* File Upload */}
+            <button
+              style={styles.iconBtn}
+              onClick={() => fileInputRef.current?.click()}
+              disabled={uploading}
+              title="Attach file"
+            >
+              {uploading ? "⏳" : "📎"}
+            </button>
+
+            <input
+              ref={fileInputRef}
+              type="file"
+              style={{ display: "none" }}
+              onChange={handleFileChange}
+              accept="image/*,.pdf,.doc,.docx,.txt"
+            />
+
             <div style={styles.inputWrapper}>
               <input
                 style={styles.input}
@@ -357,6 +512,55 @@ export default function ChatPage() {
         ::-webkit-scrollbar-thumb:hover {
           background: rgba(0, 0, 0, 0.3);
         }
+
+        @keyframes fadeIn {
+          from {
+            opacity: 0;
+          }
+          to {
+            opacity: 1;
+          }
+        }
+
+        @keyframes spin {
+          to {
+            transform: rotate(360deg);
+          }
+        }
+
+        @media (min-width: 768px) {
+          .chat-panel {
+            margin-left: 340px !important;
+          }
+        }
+
+        @media (hover: hover) {
+          button:hover:not(:disabled) {
+            background-color: rgba(0, 0, 0, 0.05) !important;
+          }
+
+          .send-btn:hover:not(:disabled) {
+            background-color: #5b5fc7 !important;
+          }
+
+          .room-card:hover {
+            background-color: #e8eaf6 !important;
+          }
+
+          .logout-btn:hover {
+            background-color: #f5f5f5 !important;
+            border-color: #6366f1 !important;
+            color: #6366f1 !important;
+          }
+        }
+
+        button:active:not(:disabled) {
+          transform: scale(0.95);
+        }
+
+        input::placeholder {
+          color: #9e9e9e;
+        }
       `}</style>
     </>
   );
@@ -366,7 +570,7 @@ const styles = {
   container: {
     display: "flex",
     height: "100vh",
-    backgroundColor: "#f0f2f5",
+    backgroundColor: "#fafafa",
     position: "relative",
     overflow: "hidden",
   },
@@ -376,7 +580,7 @@ const styles = {
     width: 340,
     maxWidth: "85vw",
     backgroundColor: "#ffffff",
-    borderRight: "1px solid #e9edef",
+    borderRight: "1px solid #e0e0e0",
     display: "flex",
     flexDirection: "column",
     position: "fixed",
@@ -385,13 +589,13 @@ const styles = {
     bottom: 0,
     zIndex: 1000,
     transition: "transform 0.3s cubic-bezier(0.4, 0, 0.2, 1)",
-    boxShadow: "2px 0 8px rgba(0,0,0,0.08)",
+    boxShadow: "2px 0 8px rgba(0,0,0,0.06)",
   },
 
   sidebarHeader: {
     padding: "16px",
-    backgroundColor: "#f0f2f5",
-    borderBottom: "1px solid #e9edef",
+    backgroundColor: "#f5f5f5",
+    borderBottom: "1px solid #e0e0e0",
     display: "flex",
     alignItems: "center",
     justifyContent: "space-between",
@@ -410,7 +614,7 @@ const styles = {
     height: 48,
     minWidth: 48,
     borderRadius: "50%",
-    backgroundColor: "#00a884",
+    background: "linear-gradient(135deg, #667eea 0%, #764ba2 100%)",
     color: "#ffffff",
     display: "flex",
     alignItems: "center",
@@ -430,7 +634,7 @@ const styles = {
   userName: {
     fontSize: 16,
     fontWeight: 500,
-    color: "#111b21",
+    color: "#212121",
     overflow: "hidden",
     textOverflow: "ellipsis",
     whiteSpace: "nowrap",
@@ -438,7 +642,7 @@ const styles = {
 
   userEmail: {
     fontSize: 13,
-    color: "#667781",
+    color: "#757575",
     overflow: "hidden",
     textOverflow: "ellipsis",
     whiteSpace: "nowrap",
@@ -451,7 +655,7 @@ const styles = {
     borderRadius: "50%",
     border: "none",
     backgroundColor: "transparent",
-    color: "#54656f",
+    color: "#616161",
     fontSize: 20,
     cursor: "pointer",
     display: "flex",
@@ -469,14 +673,14 @@ const styles = {
   roomsLabel: {
     fontSize: 13,
     fontWeight: 600,
-    color: "#667781",
+    color: "#757575",
     textTransform: "uppercase",
     letterSpacing: "0.5px",
     marginBottom: 12,
   },
 
   roomCard: {
-    backgroundColor: "#f0f2f5",
+    backgroundColor: "#f5f5f5",
     borderRadius: 12,
     padding: 12,
     cursor: "pointer",
@@ -509,22 +713,22 @@ const styles = {
   roomName: {
     fontSize: 16,
     fontWeight: 500,
-    color: "#111b21",
+    color: "#212121",
     marginBottom: 2,
   },
 
   roomDesc: {
     fontSize: 13,
-    color: "#667781",
+    color: "#757575",
   },
 
   logoutBtn: {
     margin: 16,
     padding: "12px 16px",
     borderRadius: 12,
-    border: "1px solid #e9edef",
+    border: "1px solid #e0e0e0",
     backgroundColor: "#ffffff",
-    color: "#667781",
+    color: "#757575",
     fontSize: 15,
     fontWeight: 500,
     cursor: "pointer",
@@ -539,7 +743,6 @@ const styles = {
     fontSize: 18,
   },
 
-  // BACKDROP
   backdrop: {
     position: "fixed",
     inset: 0,
@@ -560,8 +763,8 @@ const styles = {
 
   chatHeader: {
     height: 60,
-    backgroundColor: "#f0f2f5",
-    borderBottom: "1px solid #e9edef",
+    backgroundColor: "#f5f5f5",
+    borderBottom: "1px solid #e0e0e0",
     display: "flex",
     alignItems: "center",
     justifyContent: "space-between",
@@ -584,7 +787,7 @@ const styles = {
     borderRadius: "50%",
     border: "none",
     backgroundColor: "transparent",
-    color: "#54656f",
+    color: "#616161",
     fontSize: 20,
     cursor: "pointer",
     display: "flex",
@@ -597,7 +800,7 @@ const styles = {
     height: 40,
     minWidth: 40,
     borderRadius: "50%",
-    backgroundColor: "#00a884",
+    background: "linear-gradient(135deg, #667eea 0%, #764ba2 100%)",
     color: "#ffffff",
     display: "flex",
     alignItems: "center",
@@ -617,7 +820,7 @@ const styles = {
   chatName: {
     fontSize: 16,
     fontWeight: 500,
-    color: "#111b21",
+    color: "#212121",
     overflow: "hidden",
     textOverflow: "ellipsis",
     whiteSpace: "nowrap",
@@ -625,7 +828,7 @@ const styles = {
 
   chatStatus: {
     fontSize: 13,
-    color: "#667781",
+    color: "#757575",
     overflow: "hidden",
     textOverflow: "ellipsis",
     whiteSpace: "nowrap",
@@ -644,7 +847,7 @@ const styles = {
     borderRadius: "50%",
     border: "none",
     backgroundColor: "transparent",
-    color: "#54656f",
+    color: "#616161",
     fontSize: 18,
     cursor: "pointer",
     display: "flex",
@@ -659,14 +862,12 @@ const styles = {
     flex: 1,
     overflowY: "auto",
     padding: "20px 16px 80px",
-    backgroundColor: "#efeae2",
-    backgroundImage:
-      "url('data:image/svg+xml,%3Csvg width=\"100\" height=\"100\" xmlns=\"http://www.w3.org/2000/svg\"%3E%3Cpath d=\"M0 0h100v100H0z\" fill=\"%23efeae2\"/%3E%3C/svg%3E')",
+    backgroundColor: "#fafafa",
   },
 
   centerText: {
     textAlign: "center",
-    color: "#667781",
+    color: "#757575",
     fontSize: 14,
     padding: "40px 20px",
   },
@@ -674,6 +875,16 @@ const styles = {
   emptyIcon: {
     fontSize: 48,
     marginBottom: 12,
+  },
+
+  loadingSpinner: {
+    width: 40,
+    height: 40,
+    border: "3px solid #e0e0e0",
+    borderTopColor: "#6366f1",
+    borderRadius: "50%",
+    animation: "spin 0.8s linear infinite",
+    margin: "0 auto 16px",
   },
 
   messageRow: {
@@ -687,8 +898,8 @@ const styles = {
     height: 32,
     minWidth: 32,
     borderRadius: "50%",
-    backgroundColor: "#d1d7db",
-    color: "#54656f",
+    background: "linear-gradient(135deg, #667eea 0%, #764ba2 100%)",
+    color: "#ffffff",
     display: "flex",
     alignItems: "center",
     justifyContent: "center",
@@ -697,42 +908,76 @@ const styles = {
     marginTop: 4,
   },
 
+  avatarImage: {
+    width: 32,
+    height: 32,
+    borderRadius: "50%",
+    objectFit: "cover",
+  },
+
   messageBubble: {
     maxWidth: "65%",
     padding: "8px 12px",
-    borderRadius: 8,
+    borderRadius: 12,
     position: "relative",
-    boxShadow: "0 1px 2px rgba(0,0,0,0.1)",
+    boxShadow: "0 1px 2px rgba(0,0,0,0.08)",
   },
 
   messageBubbleMe: {
-    backgroundColor: "#d9fdd3",
+    backgroundColor: "#e8eaf6",
     borderBottomRightRadius: 2,
   },
 
   messageBubbleThem: {
     backgroundColor: "#ffffff",
     borderBottomLeftRadius: 2,
+    border: "1px solid #e0e0e0",
   },
 
   messageSender: {
     fontSize: 13,
     fontWeight: 600,
-    color: "#00a884",
+    color: "#6366f1",
     marginBottom: 4,
   },
 
   messageText: {
     fontSize: 14.5,
-    color: "#111b21",
+    color: "#212121",
     lineHeight: 1.4,
     wordWrap: "break-word",
     whiteSpace: "pre-wrap",
   },
 
+  messageImage: {
+    maxWidth: 220,
+    borderRadius: 12,
+    marginTop: 4,
+    cursor: "pointer",
+    display: "block",
+  },
+
+  fileLink: {
+    display: "inline-flex",
+    alignItems: "center",
+    gap: 8,
+    marginTop: 4,
+    padding: "8px 12px",
+    backgroundColor: "#f5f5f5",
+    borderRadius: 8,
+    textDecoration: "none",
+    color: "#6366f1",
+    fontSize: 14,
+    fontWeight: 500,
+  },
+
+  fileIcon: {
+    fontSize: 18,
+  },
+
   messageTime: {
     fontSize: 11,
-    color: "#667781",
+    color: "#9e9e9e",
     marginTop: 4,
     textAlign: "right",
   },
@@ -743,12 +988,19 @@ const styles = {
     bottom: 0,
     left: 0,
     right: 0,
-    backgroundColor: "#f0f2f5",
+    backgroundColor: "#f5f5f5",
     padding: "8px 16px",
     display: "flex",
     alignItems: "center",
     gap: 8,
-    borderTop: "1px solid #e9edef",
+    borderTop: "1px solid #e0e0e0",
+  },
+
+  emojiPickerWrapper: {
+    position: "absolute",
+    bottom: 50,
+    left: 0,
+    zIndex: 10,
   },
 
   inputWrapper: {
@@ -759,6 +1011,7 @@ const styles = {
     alignItems: "center",
     paddingLeft: 16,
     paddingRight: 16,
+    border: "1px solid #e0e0e0",
   },
 
   input: {
@@ -768,7 +1021,7 @@ const styles = {
     fontSize: 15,
     padding: "10px 0",
     backgroundColor: "transparent",
-    color: "#111b21",
+    color: "#212121",
   },
 
   sendBtn: {
@@ -777,7 +1030,7 @@ const styles = {
     minWidth: 44,
     borderRadius: "50%",
     border: "none",
-    backgroundColor: "#00a884",
+    background: "linear-gradient(135deg, #667eea 0%, #764ba2 100%)",
     color: "#ffffff",
     fontSize: 20,
     cursor: "pointer",
@@ -786,51 +1039,6 @@ const styles = {
     justifyContent: "center",
     transition: "all 0.2s",
     WebkitTapHighlightColor: "transparent",
+    boxShadow: "0 2px 8px rgba(102, 126, 234, 0.3)",
   },
 };
-
-// Add media queries and animations
-if (typeof document !== "undefined") {
-  const styleSheet = document.createElement("style");
-  styleSheet.textContent = `
-    @keyframes fadeIn {
-      from { opacity: 0; }
-      to { opacity: 1; }
-    }
-    
-    @media (min-width: 768px) {
-      .chat-panel {
-        margin-left: 340px !important;
-      }
-    }
-    
-    @media (hover: hover) {
-      button:hover {
-        background-color: rgba(0,0,0,0.05) !important;
-      }
-      
-      .send-btn:hover:not(:disabled) {
-        background-color: #06cf9c !important;
-      }
-      
-      .room-card:hover {
-        background-color: #e9edef !important;
-      }
-      
-      .logout-btn:hover {
-        background-color: #f0f2f5 !important;
-        border-color: #00a884 !important;
-        color: #00a884 !important;
-      }
-    }
-    
-    button:active {
-      transform: scale(0.95);
-    }
-    
-    input::placeholder {
-      color: #8696a0;
-    }
-  `;
-  document.head.appendChild(styleSheet);
-    }
