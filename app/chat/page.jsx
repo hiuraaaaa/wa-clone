@@ -296,7 +296,7 @@ export default function ChatPage() {
 
         {/* CHAT PANEL */}
         <main style={styles.chatPanel}>
-          {/* Chat Header */}
+          {/* Chat Header - FIXED */}
           <header style={styles.chatHeader}>
             <div style={styles.chatHeaderLeft}>
               {isMobile && (
@@ -323,7 +323,7 @@ export default function ChatPage() {
             </div>
           </header>
 
-          {/* Messages Area */}
+          {/* Messages Area - SCROLLABLE */}
           <div style={styles.messagesArea}>
             {loadingMessages && (
               <div style={styles.centerText}>
@@ -413,7 +413,7 @@ export default function ChatPage() {
             <div ref={bottomRef} />
           </div>
 
-          {/* Input Bar */}
+          {/* Input Bar - FIXED */}
           <div style={styles.inputBar}>
             {/* Emoji Picker */}
             <div style={{ position: "relative" }}>
@@ -486,6 +486,7 @@ export default function ChatPage() {
             "Helvetica Neue", Arial, sans-serif;
           -webkit-font-smoothing: antialiased;
           -moz-osx-font-smoothing: grayscale;
+          overflow: hidden;
         }
 
         button {
@@ -751,18 +752,21 @@ const styles = {
     animation: "fadeIn 0.3s ease",
   },
 
-  // CHAT PANEL
+  // CHAT PANEL - FIXED LAYOUT
   chatPanel: {
     flex: 1,
     display: "flex",
     flexDirection: "column",
     backgroundColor: "#ffffff",
     marginLeft: 0,
-    position: "relative",
+    height: "100vh",
+    overflow: "hidden",
   },
 
+  // CHAT HEADER - FIXED
   chatHeader: {
     height: 60,
+    minHeight: 60,
     backgroundColor: "#f5f5f5",
     borderBottom: "1px solid #e0e0e0",
     display: "flex",
@@ -770,6 +774,8 @@ const styles = {
     justifyContent: "space-between",
     padding: "0 16px",
     flexShrink: 0,
+    position: "relative",
+    zIndex: 10,
   },
 
   chatHeaderLeft: {
@@ -857,12 +863,14 @@ const styles = {
     WebkitTapHighlightColor: "transparent",
   },
 
-  // MESSAGES AREA
+  // MESSAGES AREA - SCROLLABLE ONLY
   messagesArea: {
     flex: 1,
     overflowY: "auto",
-    padding: "20px 16px 80px",
+    overflowX: "hidden",
+    padding: "20px 16px",
     backgroundColor: "#fafafa",
+    position: "relative",
   },
 
   centerText: {
@@ -982,25 +990,26 @@ const styles = {
     textAlign: "right",
   },
 
-  // INPUT BAR
+  // INPUT BAR - FIXED
   inputBar: {
-    position: "absolute",
-    bottom: 0,
-    left: 0,
-    right: 0,
+    height: 68,
+    minHeight: 68,
     backgroundColor: "#f5f5f5",
-    padding: "8px 16px",
+    padding: "10px 16px",
     display: "flex",
     alignItems: "center",
     gap: 8,
     borderTop: "1px solid #e0e0e0",
+    flexShrink: 0,
+    position: "relative",
+    zIndex: 10,
   },
 
   emojiPickerWrapper: {
     position: "absolute",
-    bottom: 50,
+    bottom: 68,
     left: 0,
-    zIndex: 10,
+    zIndex: 1000,
   },
 
   inputWrapper: {
